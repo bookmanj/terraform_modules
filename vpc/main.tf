@@ -1,3 +1,11 @@
+terraform {
+  required_providers {
+    aws = {
+      version = "~> 3.8.0"
+    }
+  }
+}
+
 locals {
   nat_gateway_count = var.single_nat_gateway ? 1 : length(var.private_subnets)
 }
