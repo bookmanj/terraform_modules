@@ -1,7 +1,10 @@
 # terraform_modules
 terraform aws module that I will be creating and testing
 
-# example usage
+# VPC module: create and manage this vpc
+
+# VPC module: example usage
+~~~
 provider "aws" {
   region = "us-east-1"
 }
@@ -23,3 +26,4 @@ module "my_vpc" {
     Environment = "dev"
   }
 }
+~~~
