@@ -1,111 +1,195 @@
-
-# create vpc
-resource "aws_vpc" "vpc" {
-  cidr_block           = var.vpc_cidr
-  instance_tenancy     = var.vpc_tenancy
-  enable_dns_support   = var.vpc_dns_support
-  enable_dns_hostnames = var.vpc_dns_hostname
-
-  tags = {
-    Name = var.vpc_name
-  }
+locals {
+  nat_gateway_count = var.single_nat_gateway ? 1 : length(var.private_subnets)
 }
 
-# create internet gateway
-resource "aws_internet_gateway" "inet_gw" {
-  vpc_id = aws_vpc.vpc.id
+# vpc
+resource "aws_vpc" "this" {
+  count = var.create_vpc ? 1 : 0
 
-  tags = {
-    Name = var.internet_gateway_name
-  }
+  cidr_block           = var.cidr
+  instance_tenancy     = var.instance_tenancy
+  enable_dns_hostnames = var.enable_dns_hostnames
+  enable_dns_support   = var.enable_dns_support
+
+  tags = merge(
+    {
+      "Name" = format("%s_vpc", var.identifier)
+    },
+    var.global_tags,
+    var.vpc_tags,
+  )
 }
 
-# create public route table and add route to inet_gw
-resource "aws_route_table" "public_route" {
-  vpc_id = aws_vpc.vpc.id
+resource "aws_vpc_ipv4_cidr_block_association" "this" {
+  count = var.create_vpc && length(var.secondary_cidr_blocks) > 0 ? length(var.secondary_cidr_blocks) : 0
 
+  vpc_id     = aws_vpc.this[0].id
+  cidr_block = element(var.secondary_cidr_blocks, count.index)
+}
+
+# internet gateway
+resource "aws_internet_gateway" "this" {
+  count = var.create_vpc && var.create_igw && length(var.public_subnets) > 0 ? 1 : 0
+
+  vpc_id = aws_vpc.this[0].id
+
+  tags = merge(
+    {
+      "Name" = format("%s_inet_gw", var.identifier)
+    },
+    var.global_tags,
+    var.igw_tags,
+  )
+}
+
+# public route table w\ route to internet gateway
+resource "aws_route_table" "this_public" {
+  count = var.create_vpc && length(var.public_subnets) > 0 ? 1 : 0
+
+  vpc_id = aws_vpc.this[0].id
   route {
-    cidr_block = var.all_traffic_cidr
-    gateway_id = aws_internet_gateway.inet_gw.id
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this[0].id
   }
 
-  tags = {
-    Name = var.public_route_table_name
-  }
+  tags = merge(
+    {
+      "Name" = format("%s_${var.public_subnet_suffix}", var.identifier)
+    },
+    var.global_tags,
+    var.public_route_table_tags,
+  )
 }
 
-# public subnet creation using a list of cidrs
-resource "aws_subnet" "public_subnet" {
+# public subnet
+resource "aws_subnet" "this_public" {
+  count = var.create_vpc && length(var.public_subnets) > 0 ? length(var.public_subnets) : 0
+
   availability_zone       = element(data.aws_availability_zones.azs.names, count.index)
-  count                   = length(var.public_cidr_list)
-  cidr_block              = element(var.public_cidr_list, count.index)
-  vpc_id                  = aws_vpc.vpc.id
-  map_public_ip_on_launch = var.public_ip_on_launch
+  cidr_block              = element(var.public_subnets, count.index)
+  vpc_id                  = aws_vpc.this[0].id
+  map_public_ip_on_launch = var.map_public_ip_on_launch
 
-  tags = {
-    Name = "${var.public_subnets_prefix}_${element(data.aws_availability_zones.azs.names, count.index)}"
-  }
+  tags = merge(
+    {
+      "Name" = format(
+        "%s_${var.public_subnet_suffix}_%s",
+        var.identifier,
+        element(data.aws_availability_zones.azs.names, count.index),
+      )
+    },
+    var.global_tags,
+    var.public_subnet_tags,
+  )
 }
 
-# associate public subnets with public route table
-resource "aws_route_table_association" "public_subnet_assoc" {
-  count          = length(var.public_cidr_list)
-  route_table_id = aws_route_table.public_route.id
-  subnet_id      = aws_subnet.public_subnet.*.id[count.index]
+# associate public subnet(s) with public route table
+resource "aws_route_table_association" "this_public" {
+  count = var.create_vpc && length(var.public_subnets) > 0 ? length(var.public_subnets) : 0
+
+  route_table_id = aws_route_table.this_public[0].id
+  subnet_id      = aws_subnet.this_public.*.id[count.index]
 }
 
-# request and elastic IP for nat gw
-resource "aws_eip" "nat_gw_eip" {
+# elastic IP
+resource "aws_eip" "this" {
+  count = var.create_vpc && var.enable_nat_gateway ? local.nat_gateway_count : 0
+
   vpc = true
 
-  tags = {
-    Name = var.nat_gw_eip_name
-  }
+  tags = merge(
+    {
+      "Name" = format(
+        "%s_eip_%s",
+        var.identifier,
+        element(data.aws_availability_zones.azs.names, var.single_nat_gateway ? 0 : count.index),
+      )
+    },
+    var.global_tags,
+    var.nat_eip_tags,
+  )
 }
 
-# create nat gateway, add to the first public subnet & assign eip
-resource "aws_nat_gateway" "nat_gw" {
-  allocation_id = aws_eip.nat_gw_eip.id
-  subnet_id     = aws_subnet.public_subnet.0.id
+# nat gateway
+resource "aws_nat_gateway" "this" {
+  count = var.create_vpc && var.enable_nat_gateway ? local.nat_gateway_count : 0
 
-  tags = {
-    Name = var.nat_gw_name
-  }
+  allocation_id = element(
+    aws_eip.this[*].id,
+    var.single_nat_gateway ? 0 : count.index,
+  )
+  subnet_id = element(
+    aws_subnet.this_public.*.id,
+    var.single_nat_gateway ? 0 : count.index,
+  )
+
+  tags = merge(
+    {
+      "Name" = format(
+        "%s_nat_gw_%s",
+        var.identifier,
+        element(data.aws_availability_zones.azs.names, var.single_nat_gateway ? 0 : count.index),
+      )
+    },
+    var.global_tags,
+    var.nat_gateway_tags,
+  )
 }
 
-# modify the default route table, add route to nat_gw & add private route table name
-resource "aws_default_route_table" "private_route" {
-  default_route_table_id = aws_vpc.vpc.default_route_table_id
+# private route table w\ route to nat gateway
+resource "aws_route_table" "this_private" {
+  count = var.create_vpc && local.nat_gateway_count > 0 ? local.nat_gateway_count : 0
 
+  vpc_id = aws_vpc.this[0].id
   route {
-    nat_gateway_id = aws_nat_gateway.nat_gw.id
-    cidr_block     = var.all_traffic_cidr
+    nat_gateway_id = element(
+      aws_nat_gateway.this[*].id,
+      var.single_nat_gateway ? 0 : count.index,
+    )
+    cidr_block = "0.0.0.0/0"
   }
 
-  tags = {
-    Name = var.private_route_name
-  }
+  tags = merge(
+    {
+      "Name" = var.single_nat_gateway ? "${var.identifier}_${var.private_subnet_suffix}" : format(
+        "%s_${var.private_subnet_suffix}_%s",
+        var.identifier,
+        element(data.aws_availability_zones.azs.names, count.index),
+      )
+    },
+    var.global_tags,
+    var.private_route_table_tags,
+  )
 }
 
-# private subnet creation using a list of cidrs
-resource "aws_subnet" "private_subnet" {
+# private subnet
+resource "aws_subnet" "this_private" {
+  count = var.create_vpc && length(var.private_subnets) > 0 ? length(var.private_subnets) : 0
+
+  vpc_id            = aws_vpc.this[0].id
+  cidr_block        = var.private_subnets[count.index]
   availability_zone = element(data.aws_availability_zones.azs.names, count.index)
-  count             = length(var.private_cidr_list)
-  cidr_block        = element(var.private_cidr_list, count.index)
-  vpc_id            = aws_vpc.vpc.id
 
-  tags = {
-    Name = "${var.private_subnets_prefix}_${element(data.aws_availability_zones.azs.names, count.index)}"
-  }
+  tags = merge(
+    {
+      "Name" = format(
+        "%s_${var.private_subnet_suffix}_%s",
+        var.identifier,
+        element(data.aws_availability_zones.azs.names, count.index),
+      )
+    },
+    var.global_tags,
+    var.private_subnet_tags,
+  )
 }
 
-# associate private subnets with private route table
-resource "aws_route_table_association" "private_subnet_assoc" {
-  count          = length(var.private_cidr_list)
-  route_table_id = aws_default_route_table.private_route.id
-  subnet_id      = aws_subnet.private_subnet.*.id[count.index]
+# associate private subnet(s) with private route table
+resource "aws_route_table_association" "this_private" {
+  count = var.create_vpc && length(var.private_subnets) > 0 ? length(var.private_subnets) : 0
+
+  subnet_id = aws_subnet.this_private.*.id[count.index]
+  route_table_id = element(
+    aws_route_table.this_private.*.id,
+    var.single_nat_gateway ? 0 : count.index,
+  )
 }
-
-
-
-
