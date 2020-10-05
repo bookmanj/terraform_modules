@@ -1,9 +1,11 @@
 # terraform_modules
-terraform aws module that I will be creating and testing
+Module | Descriptions | Dependencies
+--- | --- | ---
+VPC | AWS VPC module for creating a VPC | none
 
-# VPC module: create and manage this vpc
+Examples: 
 
-# VPC module: example usage
+`VPC` module
 ~~~
 provider "aws" {
   region = "us-east-1"
