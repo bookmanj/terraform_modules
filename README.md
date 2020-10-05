@@ -2,7 +2,8 @@
 Module | Descriptions | Dependencies
 --- | --- | ---
 vpc | AWS VPC module for creating a VPC | none
-sg  | AWS SG module for creating a security group | vpc_id
+sg  | AWS security group module for creating a security group | vpc_id
+ec2-instance  | AWS ec2 instance module for creating one or more ec2 instances  | vpc subnet and security group ID(s) 
 
 Examples: 
 
@@ -81,5 +82,53 @@ module "my_sg" {
     Terraform   = "true"
     Environment = "dev"
   }
+}
+~~~
+
+`ec2-instance` module w\ a single instance
+~~~
+module "my_ec2" {
+  source = "github.com/bookmanj/terraform_modules//ec2-instance"
+  
+  identifier             = "my"
+  ami                    = "ami-0dba2cb6798deb6d8"
+  subnet_ids             = ["subnet-04deec190aee469bd"]
+  instance_type          = "t2.micro"
+  vpc_security_group_ids = ["sg-0ca155b76a305c875"]
+  key_name               = "jay-mbp"
+
+  global_tags = {
+    Terraform   = "true"
+    Environment = "dev"
+  }
+~~~
+
+`ec2-instance` module w\ multiple instances in seperate subnets
+~~~
+data "aws_subnet_ids" "private" {
+  vpc_id = data.aws_vpc.selected.id
+
+  tags = {
+    Name = "my_private_*"
+  }
+}
+
+module "my_ec2" {
+  source = "github.com/bookmanj/terraform_modules//ec2-instance"
+
+  instance_count      = length(data.aws_subnet_ids.private.ids)
+  identifier          = "my"
+  ami                 = data.aws_ami.ubuntu.id
+  seperate_subnet_ids = true
+  subnet_ids = data.aws_subnet_ids.private.ids
+  instance_type          = "t2.micro"
+  vpc_security_group_ids = ["sg-0ca155b76a305c875"]
+  key_name               = "jay-mbp"
+
+  global_tags = {
+    Terraform   = "true"
+    Environment = "dev"
+  }
+
 }
 ~~~
