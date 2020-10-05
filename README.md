@@ -13,7 +13,7 @@ provider "aws" {
 }
 
 module "my_vpc" {
-  source = "github.com/bookmanj/terraform_modules///vpc"
+  source = "github.com/bookmanj/terraform_modules//vpc"
 
   identifier = "my"
   cidr       = "20.0.0.0/16"
